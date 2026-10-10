@@ -1,0 +1,754 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum Role {
+  ADMIN
+  APPROVER
+  PROCUREMENT_OFFICER
+  FINANCE_OFFICER
+  DEPARTMENT_USER
+  AUDITOR
+}
+
+enum UserStatus {
+  ACTIVE
+  INACTIVE
+  SUSPENDED
+}
+
+model User {
+  id           String      @id @default(uuid())
+  email        String      @unique
+  passwordHash String
+  fullName     String
+  role         Role        @default(DEPARTMENT_USER)
+  department   String
+  status       UserStatus  @default(ACTIVE)
+  avatarUrl    String?
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+
+  requisitions        PurchaseRequisition[] @relation("UserRequisitions")
+  approvedPRs         PurchaseRequisition[] @relation("ApprovedPRs")
+  createdPOs          PurchaseOrder[]       @relation("CreatedPOs")
+  approvedPOs         PurchaseOrder[]       @relation("ApprovedPOs")
+  goodsReceipts       GoodsReceipt[]        @relation("ReceivedGRNs")
+  approvedInvoices    SupplierInvoice[]     @relation("ApprovedInvoices")
+  processedPayments   Payment[]             @relation("ProcessedPayments")
+  assignedApprovals   ApprovalTask[]        @relation("AssignedApprovals")
+  approvedTasks       ApprovalTask[]        @relation("ApprovedTasks")
+  approvalHistory     ApprovalHistory[]     @relation("ActorApprovals")
+  auditLogs           AuditLog[]
+
+  @@map("users")
+}
+
+model AuditLog {
+  id        String   @id @default(uuid())
+  userId    String?
+  action    String
+  entity    String
+  entityId  String?
+  details   String?  @db.Text
+  ipAddress String?
+  createdAt DateTime @default(now())
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([entity, entityId])
+  @@index([userId])
+  @@map("audit_logs")
+}
+
+enum VendorStatus {
+  APPROVED
+  PENDING_REVIEW
+  SUSPENDED
+  ONBOARDING
+}
+
+model Vendor {
+  id                  String       @id @default(uuid())
+  vendorCode          String       @unique
+  name                String
+  legalName           String?
+  email               String
+  phone               String?
+  taxId               String?
+  address             String?
+  city                String?
+  country             String       @default("India")
+  status              VendorStatus @default(PENDING_REVIEW)
+  rating              Decimal      @default(4.5) @db.Decimal(3, 2)
+  creditTerms         String       @default("Net 30")
+  bankName            String?
+  bankAccount         String?
+  capabilities        String?      // Comma-separated: SS304 Coil, CNC, Heat Treatment, Subcontracting
+  isBlocked           Boolean      @default(false)
+  blockedReason       String?
+  auditScore          Decimal?     @db.Decimal(5, 2)
+  qualificationStatus String       @default("PENDING_AUDIT") // QUALIFIED, PENDING_AUDIT, CONDITIONAL, BLOCKED
+  createdAt           DateTime     @default(now())
+  updatedAt           DateTime     @updatedAt
+
+  contacts            VendorContact[]
+  performance         VendorPerformance[]
+  qualifications      VendorQualification[]
+  audits              VendorAudit[]
+  nonConformances     VendorNonConformance[]
+  rateContracts       RateContract[]
+  inquiries           InquiryVendor[]
+  quotations          Quotation[]
+  awardedRfqs         Rfq[]                 @relation("AwardedVendor")
+  purchaseOrders      PurchaseOrder[]
+  goodsReceipts       GoodsReceipt[]
+  invoices            SupplierInvoice[]
+  payments            Payment[]
+
+  @@map("vendors")
+}
+
+model VendorContact {
+  id          String   @id @default(uuid())
+  vendorId    String
+  name        String
+  email       String
+  phone       String?
+  designation String?
+  isPrimary   Boolean  @default(false)
+  createdAt   DateTime @default(now())
+
+  vendor Vendor @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+
+  @@map("vendor_contacts")
+}
+
+model VendorPerformance {
+  id                   String   @id @default(uuid())
+  vendorId             String
+  period               String
+  onTimeDeliveryScore  Decimal  @db.Decimal(5, 2)
+  qualityScore         Decimal  @db.Decimal(5, 2)
+  complianceScore      Decimal  @db.Decimal(5, 2)
+  overallScore         Decimal  @db.Decimal(5, 2)
+  reviewNotes          String?  @db.Text
+  createdAt            DateTime @default(now())
+
+  vendor Vendor @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+
+  @@map("vendor_performances")
+}
+
+model VendorQualification {
+  id         String   @id @default(uuid())
+  vendorId   String
+  certType   String
+  certNumber String
+  issueDate  DateTime
+  expiryDate DateTime
+  status     String   @default("VALID")
+  verifiedBy String?
+  createdAt  DateTime @default(now())
+
+  vendor Vendor @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+
+  @@map("vendor_qualifications")
+}
+
+model VendorAudit {
+  id                  String   @id @default(uuid())
+  vendorId            String
+  auditDate           DateTime @default(now())
+  auditType           String   @default("ON_SITE") // ON_SITE, DESK_REVIEW, SURVEILLANCE
+  qmsScore            Decimal  @default(0) @db.Decimal(5, 2) // wt 20%
+  processScore        Decimal  @default(0) @db.Decimal(5, 2) // wt 20%
+  infrastructureScore Decimal  @default(0) @db.Decimal(5, 2) // wt 15%
+  traceabilityScore   Decimal  @default(0) @db.Decimal(5, 2) // wt 15%
+  deliveryScore       Decimal  @default(0) @db.Decimal(5, 2) // wt 15%
+  documentationScore  Decimal  @default(0) @db.Decimal(5, 2) // wt 15%
+  totalScore          Decimal  @default(0) @db.Decimal(5, 2)
+  resultStatus        String   @default("QUALIFIED") // QUALIFIED, CONDITIONAL, NOT_QUALIFIED
+  auditedById         String?
+  attachmentName      String?
+  remarks             String?  @db.Text
+  createdAt           DateTime @default(now())
+
+  vendor              Vendor   @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+  nonConformances     VendorNonConformance[]
+
+  @@map("vendor_audits")
+}
+
+model VendorNonConformance {
+  id          String    @id @default(uuid())
+  auditId     String
+  vendorId    String
+  ncNumber    String    @unique
+  description String    @db.Text
+  severity    String    @default("MINOR") // MAJOR, MINOR, CRITICAL
+  targetDate  DateTime
+  status      String    @default("OPEN") // OPEN, CLOSED, UNDER_REVIEW
+  capaDetails String?   @db.Text
+  closedAt    DateTime?
+  closedById  String?
+  createdAt   DateTime  @default(now())
+
+  audit       VendorAudit @relation(fields: [auditId], references: [id], onDelete: Cascade)
+  vendor      Vendor      @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+
+  @@map("vendor_non_conformances")
+}
+
+model ItemCategory {
+  id          String   @id @default(uuid())
+  code        String   @unique
+  name        String
+  description String?
+  createdAt   DateTime @default(now())
+
+  items Item[]
+
+  @@map("item_categories")
+}
+
+model Item {
+  id             String   @id @default(uuid())
+  itemCode       String   @unique
+  name           String
+  description    String?
+  categoryId     String?
+  uom            String   @default("EA")
+  standardPrice  Decimal  @db.Decimal(12, 2)
+  minStock       Int      @default(10)
+  currentStock   Int      @default(50)
+  hsnCode        String?
+  gstRate        Decimal? @default(18) @db.Decimal(5, 2)
+  abcClass       String?  @default("B")
+  reorderLevel   Int?     @default(20)
+  stockCoverDays Int?     @default(30)
+  status         String   @default("ACTIVE")
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  category           ItemCategory?       @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  requisitionItems   RequisitionItem[]
+  quotationItems     QuotationItem[]
+  purchaseOrderItems PurchaseOrderItem[]
+  rateContractItems  RateContractItem[]
+  inquiries          Inquiry[]
+
+  @@map("items")
+}
+
+model BudgetControl {
+  id              String   @id @default(uuid())
+  costCenterCode  String   @unique
+  name            String
+  department      String
+  fiscalYear      String
+  allocatedAmount Decimal  @db.Decimal(14, 2)
+  committedAmount Decimal  @default(0) @db.Decimal(14, 2)
+  spentAmount     Decimal  @default(0) @db.Decimal(14, 2)
+  status          String   @default("ACTIVE")
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  requisitions PurchaseRequisition[]
+
+  @@map("budget_controls")
+}
+
+model RateContract {
+  id             String   @id @default(uuid())
+  contractNumber String   @unique
+  vendorId       String
+  title          String
+  startDate      DateTime
+  endDate        DateTime
+  totalValue     Decimal  @db.Decimal(14, 2)
+  spentAmount    Decimal  @default(0) @db.Decimal(14, 2)
+  status         String   @default("ACTIVE")
+  terms          String?  @db.Text
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  vendor Vendor             @relation(fields: [vendorId], references: [id], onDelete: Restrict)
+  items  RateContractItem[]
+
+  @@map("rate_contracts")
+}
+
+model RateContractItem {
+  id              String   @id @default(uuid())
+  contractId      String
+  itemId          String
+  contractedPrice Decimal  @db.Decimal(12, 2)
+  minQuantity     Int      @default(1)
+  createdAt       DateTime @default(now())
+
+  contract RateContract @relation(fields: [contractId], references: [id], onDelete: Cascade)
+  item     Item         @relation(fields: [itemId], references: [id], onDelete: Restrict)
+
+  @@map("rate_contract_items")
+}
+
+enum PRPriority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+enum PRStatus {
+  DRAFT
+  SUBMITTED
+  PENDING_APPROVAL
+  APPROVED
+  REJECTED
+  INQUIRY_CREATED
+  PO_CREATED
+}
+
+model PurchaseRequisition {
+  id                   String     @id @default(uuid())
+  prNumber             String     @unique
+  title                String
+  department           String
+  requesterId          String
+  costCenterId         String?
+  priority             PRPriority @default(MEDIUM)
+  status               PRStatus   @default(DRAFT)
+  totalEstimatedAmount Decimal    @default(0) @db.Decimal(14, 2)
+  rejectionReason      String?
+  approvedAt           DateTime?
+  approvedById         String?
+  notes                String?    @db.Text
+  createdAt            DateTime   @default(now())
+  updatedAt            DateTime   @updatedAt
+
+  requester  User           @relation("UserRequisitions", fields: [requesterId], references: [id], onDelete: Restrict)
+  approvedBy User?          @relation("ApprovedPRs", fields: [approvedById], references: [id], onDelete: SetNull)
+  costCenter BudgetControl? @relation(fields: [costCenterId], references: [id], onDelete: SetNull)
+
+  items          RequisitionItem[]
+  inquiries      Inquiry[]
+  rfqs           Rfq[]
+  purchaseOrders PurchaseOrder[]
+
+  @@map("purchase_requisitions")
+}
+
+model RequisitionItem {
+  id                  String    @id @default(uuid())
+  requisitionId       String
+  itemId              String?
+  description         String
+  quantity            Int
+  estimatedUnitPrice  Decimal   @db.Decimal(12, 2)
+  estimatedTotalPrice Decimal   @db.Decimal(14, 2)
+  uom                 String    @default("EA")
+  requiredByDate      DateTime?
+  createdAt           DateTime  @default(now())
+
+  requisition PurchaseRequisition @relation(fields: [requisitionId], references: [id], onDelete: Cascade)
+  item        Item?               @relation(fields: [itemId], references: [id], onDelete: SetNull)
+
+  @@map("requisition_items")
+}
+
+enum InquiryStatus {
+  DRAFT
+  SENT
+  QUOTES_RECEIVED
+  CLOSED
+}
+
+model Inquiry {
+  id                  String        @id @default(uuid())
+  inquiryNumber       String        @unique
+  prId                String?
+  itemId              String?
+  title               String
+  fgPartName          String?
+  fgPartNo            String?
+  customer            String?
+  customerTargetPrice Decimal?      @db.Decimal(14, 2)
+  requestType         String?       // Raw Material, Child Part, Subcontracting, Equipment, Tooling, Consumable, Packaging
+  drawingSpec         String?
+  quantity            Int?
+  dueDate             DateTime
+  status              InquiryStatus @default(DRAFT)
+  notes               String?       @db.Text
+  createdAt           DateTime      @default(now())
+  updatedAt           DateTime      @updatedAt
+
+  pr             PurchaseRequisition? @relation(fields: [prId], references: [id], onDelete: SetNull)
+  item           Item?                @relation(fields: [itemId], references: [id], onDelete: SetNull)
+  vendors        InquiryVendor[]
+  rfqs           Rfq[]
+  purchaseOrders PurchaseOrder[]
+
+  @@map("inquiries")
+}
+
+model InquiryVendor {
+  id            String    @id @default(uuid())
+  inquiryId     String
+  vendorId      String
+  status        String    @default("INVITED") // INVITED, AWAITING, QUOTED, NO_RESPONSE, NOT_INTERESTED, NOT_FEASIBLE
+  offeredPrice  Decimal?  @db.Decimal(14, 2)
+  quotedDate    DateTime?
+  mailSent      Boolean   @default(false)
+  sentDate      DateTime?
+  leadTimeDays  Int?
+  moq           Int?
+  paymentTerms  String?
+  respondedAt   DateTime?
+
+  inquiry    Inquiry           @relation(fields: [inquiryId], references: [id], onDelete: Cascade)
+  vendor     Vendor            @relation(fields: [vendorId], references: [id], onDelete: Restrict)
+  followups  InquiryFollowup[]
+
+  @@unique([inquiryId, vendorId])
+  @@map("inquiry_vendors")
+}
+
+model InquiryFollowup {
+  id               String    @id @default(uuid())
+  inquiryVendorId  String
+  followupDate     DateTime  @default(now())
+  mode             String    @default("EMAIL") // EMAIL, PHONE, WHATSAPP, MEETING
+  notes            String    @db.Text
+  nextFollowupDate DateTime?
+  loggedById       String?
+  createdAt        DateTime  @default(now())
+
+  inquiryVendor InquiryVendor @relation(fields: [inquiryVendorId], references: [id], onDelete: Cascade)
+
+  @@map("inquiry_followups")
+}
+
+model Rfq {
+  id                 String    @id @default(uuid())
+  rfqNumber          String    @unique
+  inquiryId          String?
+  prId               String?
+  title              String
+  deadline           DateTime
+  terms              String?   @db.Text
+  status             String    @default("ACTIVE") // ACTIVE, EVALUATION, AWARDED, CLOSED
+  awardedVendorId    String?
+  awardJustification String?   @db.Text
+  awardedAt          DateTime?
+  savingsAmount      Decimal?  @db.Decimal(14, 2)
+  createdAt          DateTime  @default(now())
+
+  inquiry       Inquiry?             @relation(fields: [inquiryId], references: [id], onDelete: SetNull)
+  pr            PurchaseRequisition? @relation(fields: [prId], references: [id], onDelete: SetNull)
+  awardedVendor Vendor?              @relation("AwardedVendor", fields: [awardedVendorId], references: [id], onDelete: SetNull)
+  quotations    Quotation[]
+
+  @@map("rfqs")
+}
+
+model Quotation {
+  id              String   @id @default(uuid())
+  quoteNumber     String   @unique
+  rfqId           String
+  vendorId        String
+  quoteDate       DateTime @default(now())
+  validUntil      DateTime
+  totalAmount     Decimal  @db.Decimal(14, 2)
+  paymentTerms    String   @default("Net 30")
+  deliveryDays    Int      @default(14)
+  notes           String?  @db.Text
+  status          String   @default("SUBMITTED") // SUBMITTED, SELECTED, REJECTED
+  techScore       Decimal? @default(80) @db.Decimal(5, 2)
+  commercialScore Decimal? @default(80) @db.Decimal(5, 2)
+  compositeScore  Decimal? @default(80) @db.Decimal(5, 2)
+  isL1            Boolean  @default(false)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  rfq            Rfq             @relation(fields: [rfqId], references: [id], onDelete: Cascade)
+  vendor         Vendor          @relation(fields: [vendorId], references: [id], onDelete: Restrict)
+  items          QuotationItem[]
+  purchaseOrders PurchaseOrder[]
+
+  @@map("quotations")
+}
+
+model QuotationItem {
+  id           String   @id @default(uuid())
+  quotationId  String
+  itemId       String?
+  quantity     Int
+  unitPrice    Decimal  @db.Decimal(12, 2)
+  taxRate      Decimal  @default(0) @db.Decimal(5, 2)
+  totalPrice   Decimal  @db.Decimal(14, 2)
+  leadTimeDays Int      @default(7)
+
+  quotation Quotation @relation(fields: [quotationId], references: [id], onDelete: Cascade)
+  item      Item?     @relation(fields: [itemId], references: [id], onDelete: SetNull)
+
+  @@map("quotation_items")
+}
+
+enum POStatus {
+  DRAFT
+  PENDING_APPROVAL
+  APPROVED
+  ISSUED
+  PARTIALLY_RECEIVED
+  RECEIVED
+  BILLED
+  CANCELLED
+}
+
+model PurchaseOrder {
+  id                  String    @id @default(uuid())
+  poNumber            String    @unique
+  prId                String?
+  quoteId             String?
+  inquiryId           String?
+  vendorId            String
+  createdById         String
+  issueDate           DateTime  @default(now())
+  expectedDeliveryDate DateTime
+  paymentTerms        String    @default("Net 30")
+  status              POStatus  @default(DRAFT)
+  subtotal            Decimal   @db.Decimal(14, 2)
+  taxAmount           Decimal   @default(0) @db.Decimal(14, 2)
+  totalAmount         Decimal   @db.Decimal(14, 2)
+  notes               String?   @db.Text
+  termsAndConditions  String?   @db.Text
+  qualityGatePassed   Boolean   @default(true)
+  managementOverride  Boolean   @default(false)
+  overrideReason      String?
+  approvedAt          DateTime?
+  approvedById        String?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  pr         PurchaseRequisition? @relation(fields: [prId], references: [id], onDelete: SetNull)
+  quotation  Quotation?           @relation(fields: [quoteId], references: [id], onDelete: SetNull)
+  inquiry    Inquiry?             @relation(fields: [inquiryId], references: [id], onDelete: SetNull)
+  vendor     Vendor               @relation(fields: [vendorId], references: [id], onDelete: Restrict)
+  createdBy  User                 @relation("CreatedPOs", fields: [createdById], references: [id], onDelete: Restrict)
+  approvedBy User?                @relation("ApprovedPOs", fields: [approvedById], references: [id], onDelete: SetNull)
+
+  items         PurchaseOrderItem[]
+  goodsReceipts GoodsReceipt[]
+  invoices      SupplierInvoice[]
+
+  @@map("purchase_orders")
+}
+
+model PurchaseOrderItem {
+  id               String   @id @default(uuid())
+  poId             String
+  itemId           String?
+  description      String
+  quantity         Int
+  unitPrice        Decimal  @db.Decimal(12, 2)
+  taxRate          Decimal  @default(0) @db.Decimal(5, 2)
+  totalPrice       Decimal  @db.Decimal(14, 2)
+  quantityReceived Int      @default(0)
+  quantityBilled   Int      @default(0)
+
+  purchaseOrder PurchaseOrder         @relation(fields: [poId], references: [id], onDelete: Cascade)
+  item          Item?                 @relation(fields: [itemId], references: [id], onDelete: SetNull)
+  receiptItems  GoodsReceiptItem[]
+  invoiceItems  SupplierInvoiceItem[]
+
+  @@map("purchase_order_items")
+}
+
+enum GRNStatus {
+  ACCEPTED
+  PARTIALLY_ACCEPTED
+  REJECTED
+}
+
+model GoodsReceipt {
+  id                 String    @id @default(uuid())
+  grnNumber          String    @unique
+  poId               String
+  vendorId           String
+  receivedById       String
+  receiptDate        DateTime  @default(now())
+  deliveryNoteNumber String?
+  vehicleNumber      String?
+  status             GRNStatus @default(ACCEPTED)
+  remarks            String?   @db.Text
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  purchaseOrder PurchaseOrder @relation(fields: [poId], references: [id], onDelete: Restrict)
+  vendor        Vendor        @relation(fields: [vendorId], references: [id], onDelete: Restrict)
+  receivedBy    User          @relation("ReceivedGRNs", fields: [receivedById], references: [id], onDelete: Restrict)
+
+  items GoodsReceiptItem[]
+
+  @@map("goods_receipts")
+}
+
+model GoodsReceiptItem {
+  id               String   @id @default(uuid())
+  grnId            String
+  poItemId         String
+  quantityReceived Int
+  quantityAccepted Int
+  quantityRejected Int      @default(0)
+  rejectionReason  String?
+
+  goodsReceipt      GoodsReceipt      @relation(fields: [grnId], references: [id], onDelete: Cascade)
+  purchaseOrderItem PurchaseOrderItem @relation(fields: [poItemId], references: [id], onDelete: Restrict)
+
+  @@map("goods_receipt_items")
+}
+
+enum InvoiceStatus {
+  PENDING_APPROVAL
+  APPROVED
+  PAID
+  REJECTED
+  CANCELLED
+}
+
+enum MatchStatus {
+  MATCHED_3_WAY
+  PRICE_VARIANCE
+  QTY_VARIANCE
+  UNMATCHED
+}
+
+model SupplierInvoice {
+  id                 String        @id @default(uuid())
+  invoiceNumber      String        @unique
+  supplierInvoiceRef String
+  poId               String
+  vendorId           String
+  invoiceDate        DateTime
+  dueDate            DateTime
+  subtotal           Decimal       @db.Decimal(14, 2)
+  taxAmount          Decimal       @default(0) @db.Decimal(14, 2)
+  totalAmount        Decimal       @db.Decimal(14, 2)
+  matchStatus        MatchStatus   @default(MATCHED_3_WAY)
+  hasException       Boolean       @default(false)
+  exceptionReason    String?
+  debitNoteAmount    Decimal?      @default(0) @db.Decimal(14, 2)
+  status             InvoiceStatus @default(PENDING_APPROVAL)
+  approvedAt         DateTime?
+  approvedById       String?
+  notes              String?       @db.Text
+  createdAt          DateTime      @default(now())
+  updatedAt          DateTime      @updatedAt
+
+  purchaseOrder PurchaseOrder @relation(fields: [poId], references: [id], onDelete: Restrict)
+  vendor        Vendor        @relation(fields: [vendorId], references: [id], onDelete: Restrict)
+  approvedBy    User?         @relation("ApprovedInvoices", fields: [approvedById], references: [id], onDelete: SetNull)
+
+  items    SupplierInvoiceItem[]
+  payments Payment[]
+
+  @@map("supplier_invoices")
+}
+
+model SupplierInvoiceItem {
+  id             String  @id @default(uuid())
+  invoiceId      String
+  poItemId       String
+  description    String
+  quantityBilled Int
+  unitPrice      Decimal @db.Decimal(12, 2)
+  totalPrice     Decimal @db.Decimal(14, 2)
+
+  invoice           SupplierInvoice   @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  purchaseOrderItem PurchaseOrderItem @relation(fields: [poItemId], references: [id], onDelete: Restrict)
+
+  @@map("supplier_invoice_items")
+}
+
+enum PaymentStatus {
+  SCHEDULED
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+model Payment {
+  id              String        @id @default(uuid())
+  paymentNumber   String        @unique
+  invoiceId       String
+  vendorId        String
+  paymentDate     DateTime      @default(now())
+  amount          Decimal       @db.Decimal(14, 2)
+  paymentMethod   String        @default("BANK_TRANSFER")
+  referenceNumber String?       // Transaction Ref
+  utrNumber       String?       // Bank UTR number (§11)
+  status          PaymentStatus @default(COMPLETED)
+  processedById   String
+  notes           String?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  invoice     SupplierInvoice @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
+  vendor      Vendor          @relation(fields: [vendorId], references: [id], onDelete: Restrict)
+  processedBy User            @relation("ProcessedPayments", fields: [processedById], references: [id], onDelete: Restrict)
+
+  @@map("payments")
+}
+
+model ApprovalTask {
+  id           String    @id @default(uuid())
+  entityType   String
+  entityId     String
+  title        String
+  currentLevel Int       @default(1)
+  requiredRole Role      @default(APPROVER)
+  status       String    @default("PENDING")
+  assignedToId String?
+  approvedAt   DateTime?
+  approvedById String?
+  comments     String?   @db.Text
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  assignedTo User? @relation("AssignedApprovals", fields: [assignedToId], references: [id], onDelete: SetNull)
+  approvedBy User? @relation("ApprovedTasks", fields: [approvedById], references: [id], onDelete: SetNull)
+
+  history ApprovalHistory[]
+
+  @@map("approval_tasks")
+}
+
+model ApprovalHistory {
+  id         String   @id @default(uuid())
+  taskId     String
+  step       Int      @default(1)
+  action     String
+  actorId    String
+  comments   String?  @db.Text
+  actionDate DateTime @default(now())
+
+  task  ApprovalTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  actor User         @relation("ActorApprovals", fields: [actorId], references: [id], onDelete: Restrict)
+
+  @@map("approval_history")
+}
+
+model SystemSetting {
+  id          String   @id @default(uuid())
+  key         String   @unique
+  value       String   @db.Text
+  description String?
+  updatedAt   DateTime @updatedAt
+
+  @@map("system_settings")
+}
