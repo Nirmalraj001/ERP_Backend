@@ -249,3 +249,87 @@ vendorsRouter.post('/bulk-import', authenticate, async (req: Request, res: Respo
   }
 })
 
+// POST /api/v1/vendors/:id/block (Quality vendor blocking alias §12)
+vendorsRouter.post('/:id/block', authenticate, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    const vendorId = req.params.id as string
+    const reason = (req.body && req.body.reason) || 'Quality restriction'
+
+    const vendor = await prisma.vendor.update({
+      where: { id: vendorId },
+      data: {
+        isBlocked: true,
+        blockedReason: reason,
+        qualificationStatus: 'BLOCKED',
+      },
+    })
+
+    await prisma.auditLog.create({
+      data: {
+        userId: req.user!.id,
+        action: 'BLOCK_VENDOR',
+        entity: 'VENDOR',
+        entityId: vendorId,
+        details: `Vendor ${vendor.name} (${vendor.vendorCode}) blocked by Quality. Reason: ${reason}`,
+        ipAddress: req.ip || '127.0.0.1',
+      },
+    })
+
+    res.json({
+      success: true,
+      message: `Vendor ${vendor.name} has been blocked from procurement actions.`,
+    })
+  } catch (error) {
+    next(error)
+  }
+})
+
+// POST /api/v1/vendors/:id/unblock (Quality vendor unblocking alias §12)
+vendorsRouter.post('/:id/unblock', authenticate, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    const vendorId = req.params.id as string
+
+    const vendor = await prisma.vendor.findUnique({
+      where: { id: vendorId },
+      include: { nonConformances: { where: { status: 'OPEN' } } },
+    })
+
+    if (!vendor) {
+      res.status(404).json({ success: false, message: 'Vendor not found' })
+      return
+    }
+
+    const openNcs = vendor.nonConformances.length
+    const score = vendor.auditScore ? Number(vendor.auditScore) : 0
+    const newQual = score >= 70 ? (openNcs > 0 ? 'CONDITIONAL' : 'QUALIFIED') : 'PENDING_AUDIT'
+
+    await prisma.vendor.update({
+      where: { id: vendorId },
+      data: {
+        isBlocked: false,
+        blockedReason: null,
+        qualificationStatus: newQual,
+      },
+    })
+
+    await prisma.auditLog.create({
+      data: {
+        userId: req.user!.id,
+        action: 'UNBLOCK_VENDOR',
+        entity: 'VENDOR',
+        entityId: vendorId,
+        details: `Vendor ${vendor.name} unblocked by Quality. Restored status: ${newQual}`,
+        ipAddress: req.ip || '127.0.0.1',
+      },
+    })
+
+    res.json({
+      success: true,
+      message: `Vendor ${vendor.name} unblocked successfully.`,
+    })
+  } catch (error) {
+    next(error)
+  }
+})
+
+

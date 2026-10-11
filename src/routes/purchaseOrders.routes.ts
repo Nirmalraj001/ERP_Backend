@@ -78,22 +78,56 @@ purchaseOrdersRouter.post('/', authenticate, async (req: Request, res: Response,
     const count = await prisma.purchaseOrder.count()
     const finalPoNumber = poNumber || `PO-2026-${String(count + 1).padStart(5, '0')}`
 
-    // Ensure we have a valid vendor
     let targetVendorId = vendorId
     if (!targetVendorId) {
-      const firstVendor = await prisma.vendor.findFirst()
-      if (firstVendor) {
-        targetVendorId = firstVendor.id
-      } else {
-        const newVnd = await prisma.vendor.create({
-          data: {
-            vendorCode: 'VND-001',
-            name: 'Apex Industrial Materials Corp',
-            email: 'sales@apexmaterials.example',
-          },
-        })
-        targetVendorId = newVnd.id
-      }
+      const topVendor = await prisma.vendor.findFirst({
+        where: { isBlocked: false, qualificationStatus: 'QUALIFIED' },
+      })
+      if (topVendor) targetVendorId = topVendor.id
+    }
+
+    if (!targetVendorId) {
+      res.status(400).json({ success: false, message: 'Vendor ID is required to create a Purchase Order.' })
+      return
+    }
+
+    // Validate target vendor and enforce Quality Gate (§12, §16)
+    const vendor = await prisma.vendor.findUnique({
+      where: { id: targetVendorId },
+      include: { nonConformances: { where: { status: 'OPEN' } } },
+    })
+
+    if (!vendor) {
+      res.status(404).json({ success: false, message: 'Vendor not found' })
+      return
+    }
+
+    if (vendor.isBlocked) {
+      res.status(403).json({
+        success: false,
+        message: `Quality Gate Breach: Vendor ${vendor.name} is BLOCKED (${vendor.blockedReason || 'Quality restriction'}). PO creation blocked (§12).`,
+      })
+      return
+    }
+
+    if (vendor.qualificationStatus === 'CONDITIONAL' || vendor.nonConformances.length > 0) {
+      res.status(403).json({
+        success: false,
+        message: `Quality Gate Breach: Vendor ${vendor.name} has open Non-Conformances. PO creation blocked until CAPA is verified and closed (§12).`,
+      })
+      return
+    }
+
+    if (
+      vendor.qualificationStatus === 'PENDING_AUDIT' ||
+      vendor.qualificationStatus === 'NOT_QUALIFIED' ||
+      (vendor.auditScore !== null && Number(vendor.auditScore) < 70)
+    ) {
+      res.status(403).json({
+        success: false,
+        message: `Quality Gate Breach: Vendor ${vendor.name} is not qualified (Score < 70). Audit required before raising PO (§12).`,
+      })
+      return
     }
 
     const calculatedTotal = totalAmount || 15000

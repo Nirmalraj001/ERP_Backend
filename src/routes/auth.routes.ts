@@ -136,6 +136,7 @@ authRouter.get('/me', authenticate, async (req: Request, res: Response, next: Ne
     res.json({
       success: true,
       user,
+      data: user,
     })
   } catch (error) {
     next(error)

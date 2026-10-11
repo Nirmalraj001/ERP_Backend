@@ -9,7 +9,9 @@
     "start": "node dist/index.js",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
-    "db:seed": "tsx prisma/seed.ts"
+    "db:seed": "tsx prisma/seed.ts",
+    "test": "tsx src/tests/e2e_audit_test.ts",
+    "test:workflow": "tsx src/tests/comprehensive_workflow_audit_test.ts"
   },
   "keywords": [],
   "author": "",

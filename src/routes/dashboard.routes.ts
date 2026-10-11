@@ -4,7 +4,7 @@ import { authenticate } from '../middleware/auth.js'
 
 export const dashboardRouter = Router()
 
-dashboardRouter.get('/summary', authenticate, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+const handleSummary = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
     const [
       totalPRs,
@@ -142,36 +142,42 @@ dashboardRouter.get('/summary', authenticate, async (req: Request, res: Response
       oldestAgeDays = Math.floor((Date.now() - new Date(oldestPendingApproval.createdAt).getTime()) / (1000 * 3600 * 24))
     }
 
+    const summaryData = {
+      totalSpend,
+      totalSavings,
+      outstandingAP,
+      openRequisitions: openRequisitionsCount,
+      liveEnquiries: liveEnquiriesCount,
+      ordersInProgress: ordersInProgressCount,
+      openPOs: activePOsCount,
+      pendingGRN: pendingGRNCount,
+      matchExceptions: matchExceptionsCount,
+      budgetUtilisedPct,
+      pendingApprovals: pendingApprovalsCount,
+      approvalBanner: {
+        pendingCount: pendingApprovalsCount,
+        preview: oldestPendingApproval?.title || 'No pending approvals awaiting decision',
+        oldestAgeDays: Math.max(1, oldestAgeDays),
+      },
+      s2pFunnel,
+      departmentalBudgetBars,
+      monthlySpendData,
+      categorySpend,
+      budgets,
+      recentRequisitions: recentPRs,
+      recentPurchaseOrders: recentPOs,
+      recentActivities: recentAuditLogs,
+    }
+
     res.json({
       success: true,
-      summary: {
-        totalSpend,
-        totalSavings,
-        outstandingAP,
-        openRequisitions: openRequisitionsCount,
-        liveEnquiries: liveEnquiriesCount,
-        ordersInProgress: ordersInProgressCount,
-        openPOs: activePOsCount,
-        pendingGRN: pendingGRNCount,
-        matchExceptions: matchExceptionsCount,
-        budgetUtilisedPct,
-        pendingApprovals: pendingApprovalsCount,
-        approvalBanner: {
-          pendingCount: pendingApprovalsCount,
-          preview: oldestPendingApproval?.title || 'No pending approvals awaiting decision',
-          oldestAgeDays: Math.max(1, oldestAgeDays),
-        },
-        s2pFunnel,
-        departmentalBudgetBars,
-        monthlySpendData,
-        categorySpend,
-        budgets,
-        recentRequisitions: recentPRs,
-        recentPurchaseOrders: recentPOs,
-        recentActivities: recentAuditLogs,
-      },
+      summary: summaryData,
+      data: summaryData,
     })
   } catch (error) {
     next(error)
   }
-})
+}
+
+dashboardRouter.get('/summary', authenticate, handleSummary)
+dashboardRouter.get('/control-tower', authenticate, handleSummary)

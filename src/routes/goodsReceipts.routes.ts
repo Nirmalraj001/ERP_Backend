@@ -27,6 +27,101 @@ goodsReceiptsRouter.get('/', authenticate, async (req: Request, res: Response, n
   }
 })
 
+// POST /api/v1/goods-receipts (Create GRN against PO §11)
+goodsReceiptsRouter.post('/', authenticate, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    const { poId, deliveryNoteNumber, vehicleNumber, warehouse, batchNumber, heatNumber, remarks, items } = req.body
+
+    const po = await prisma.purchaseOrder.findUnique({
+      where: { id: poId },
+      include: { items: true, vendor: true },
+    })
+
+    if (!po) {
+      res.status(404).json({ success: false, message: 'Purchase Order not found' })
+      return
+    }
+
+    if (po.status !== 'APPROVED' && po.status !== 'PARTIALLY_RECEIVED') {
+      res.status(400).json({
+        success: false,
+        message: `Goods can only be received against APPROVED or PARTIALLY_RECEIVED Purchase Orders. Current status: ${po.status}`,
+      })
+      return
+    }
+
+    const count = await prisma.goodsReceipt.count()
+    const grnNumber = `GRN-2026-${String(count + 1).padStart(5, '0')}`
+
+    const combinedRemarks = [
+      remarks,
+      warehouse ? `Warehouse: ${warehouse}` : null,
+      batchNumber ? `Batch: ${batchNumber}` : null,
+      heatNumber ? `Heat: ${heatNumber}` : null,
+    ].filter(Boolean).join(' | ') || null
+
+    const newGRN = await prisma.$transaction(async (tx) => {
+      const grn = await tx.goodsReceipt.create({
+        data: {
+          grnNumber,
+          poId: po.id,
+          vendorId: po.vendorId,
+          receivedById: req.user!.id,
+          receiptDate: new Date(),
+          deliveryNoteNumber: deliveryNoteNumber || `DN-${Date.now().toString().slice(-6)}`,
+          vehicleNumber: vehicleNumber || null,
+          status: 'ACCEPTED',
+          remarks: combinedRemarks,
+          items: {
+            create: Array.isArray(items) && items.length > 0
+              ? items.map((it: any) => ({
+                  poItemId: it.poItemId || po.items[0]?.id,
+                  quantityReceived: Number(it.quantityReceived) || 1,
+                  quantityAccepted: Number(it.quantityAccepted) || Number(it.quantityReceived) || 1,
+                  quantityRejected: Number(it.quantityRejected) || 0,
+                  rejectionReason: it.rejectionReason || null,
+                }))
+              : po.items.map((pi) => ({
+                  poItemId: pi.id,
+                  quantityReceived: pi.quantity,
+                  quantityAccepted: pi.quantity,
+                  quantityRejected: 0,
+                })),
+          },
+        },
+        include: { items: true, vendor: true, purchaseOrder: true },
+      })
+
+      // Update PO status to PARTIALLY_RECEIVED (§10 Lifecycle)
+      await tx.purchaseOrder.update({
+        where: { id: po.id },
+        data: { status: 'PARTIALLY_RECEIVED' },
+      })
+
+      await tx.auditLog.create({
+        data: {
+          userId: req.user!.id,
+          action: 'CREATE_GRN',
+          entity: 'GOODS_RECEIPT',
+          entityId: grn.id,
+          details: `Created GRN ${grnNumber} against PO ${po.poNumber} with warehouse receipt`,
+          ipAddress: req.ip || '127.0.0.1',
+        },
+      })
+
+      return grn
+    })
+
+    res.status(201).json({
+      success: true,
+      message: `Goods Receipt ${newGRN.grnNumber} posted successfully`,
+      data: newGRN,
+    })
+  } catch (error) {
+    next(error)
+  }
+})
+
 // POST /api/v1/goods-receipts/bulk-import (Excel Bulk Import)
 goodsReceiptsRouter.post('/bulk-import', authenticate, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {

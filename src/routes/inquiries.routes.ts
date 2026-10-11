@@ -628,3 +628,110 @@ inquiriesRouter.post('/rfq-requests/:id/send-mail', authenticate, async (req: Re
     next(error)
   }
 })
+
+// POST /api/v1/inquiries/rfq-requests/:id/release-po (§8, §14 Interlinks: Award & release PO)
+inquiriesRouter.post('/rfq-requests/:id/release-po', authenticate, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    const id = req.params.id as string
+    const target = await prisma.inquiryVendor.findUnique({
+      where: { id },
+      include: {
+        inquiry: { include: { item: true } },
+        vendor: { include: { nonConformances: { where: { status: 'OPEN' } } } },
+      },
+    })
+
+    if (!target) {
+      res.status(404).json({ success: false, message: 'RFQ Request line not found' })
+      return
+    }
+
+    if (target.status !== 'QUOTED' && (!target.offeredPrice || Number(target.offeredPrice) <= 0)) {
+      res.status(400).json({ success: false, message: 'Vendor must provide a quote (offered price) before PO release.' })
+      return
+    }
+
+    // Quality gate validation (§12, §16, §18 R11)
+    const vendor = target.vendor
+    if (vendor.isBlocked) {
+      res.status(403).json({ success: false, message: `Quality Gate Breach: Vendor ${vendor.name} is BLOCKED. PO cannot be raised.` })
+      return
+    }
+    if (vendor.qualificationStatus === 'CONDITIONAL' || vendor.nonConformances.length > 0) {
+      res.status(403).json({ success: false, message: `Quality Gate Breach: Vendor ${vendor.name} has open Non-Conformances. PO blocked until NC closure.` })
+      return
+    }
+    if (vendor.qualificationStatus === 'PENDING_AUDIT' || vendor.qualificationStatus === 'NOT_QUALIFIED' || (vendor.auditScore !== null && Number(vendor.auditScore) < 70)) {
+      res.status(403).json({ success: false, message: `Quality Gate Breach: Vendor ${vendor.name} is not qualified (Score < 70). Audit required.` })
+      return
+    }
+
+    const poCount = await prisma.purchaseOrder.count()
+    const poNumber = `PO-2026-${String(poCount + 1).padStart(5, '0')}`
+
+    const qty = target.inquiry.quantity || 100
+    const unitPrice = Number(target.offeredPrice)
+    const subtotal = qty * unitPrice
+    const taxAmount = Math.round(subtotal * 0.18)
+    const totalAmount = subtotal + taxAmount
+
+    const newPO = await prisma.$transaction(async (tx) => {
+      const po = await tx.purchaseOrder.create({
+        data: {
+          poNumber,
+          inquiryId: target.inquiryId,
+          vendorId: target.vendorId,
+          createdById: req.user!.id,
+          expectedDeliveryDate: new Date(Date.now() + (target.leadTimeDays || 14) * 86400000),
+          paymentTerms: target.paymentTerms || vendor.creditTerms || 'Net 30',
+          status: 'APPROVED',
+          subtotal,
+          taxAmount,
+          totalAmount,
+          notes: `Released from Inquiry ${target.inquiry.inquiryNumber} (Part: ${target.inquiry.fgPartName || target.inquiry.title})`,
+          items: {
+            create: [
+              {
+                itemId: target.inquiry.itemId || null,
+                description: `${target.inquiry.fgPartName || target.inquiry.title} - ${target.inquiry.requestType} (${target.inquiry.item?.uom || 'NOS'})`,
+                quantity: qty,
+                unitPrice,
+                taxRate: 18,
+                totalPrice: subtotal,
+              },
+            ],
+          },
+        },
+      })
+
+      // Close the inquiry
+      await tx.inquiry.update({
+        where: { id: target.inquiryId },
+        data: { status: 'CLOSED' },
+      })
+
+      // Log audit
+      await tx.auditLog.create({
+        data: {
+          userId: req.user!.id,
+          action: 'RELEASE_PO_FROM_INQUIRY',
+          entity: 'INQUIRY',
+          entityId: target.inquiryId,
+          details: `Released Purchase Order ${poNumber} to vendor ${vendor.name} for inquiry ${target.inquiry.inquiryNumber}`,
+          ipAddress: req.ip || '127.0.0.1',
+        },
+      })
+
+      return po
+    })
+
+    res.status(201).json({
+      success: true,
+      message: `Purchase Order ${newPO.poNumber} created and Inquiry closed successfully!`,
+      data: newPO,
+    })
+  } catch (error) {
+    next(error)
+  }
+})
+
